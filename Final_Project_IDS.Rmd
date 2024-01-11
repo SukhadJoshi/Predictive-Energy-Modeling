@@ -5,14 +5,6 @@ output:
   html_document: default
 ---
 
-# Intro to Data Science - Final Project
-# Group Members:-
-# 1. Jackson Bayuk
-# 2. Sukhad Dnyanesh Joshi
-# 3. Kunal Ahirrao
-# 4. Het Bhavesh Trivedi
-# 5. Tianyuan Sheng
-# 6. Marina Mitiaeva
 ```{r}
 #install.packages("arrow")
 library(arrow)
@@ -21,8 +13,7 @@ library(dplyr)
 library(purrr)
 ```
 
-a. Determine the best approach to read and merge the data and determine what should be
-the output during this ‘data preparation’ phase.
+
 
 ```{r}
 # data description 
@@ -83,7 +74,7 @@ View(final)
 
 ```
 
-b. Do exploratory analysis of the data – to gain some basic insight about the data
+
 
 ```{r}
 # first 5 rows of the data
@@ -105,8 +96,7 @@ hist(final_cleaned$daily_total_usage)
 hist(final_cleaned$in.sqft)
 ```
 
-c. Build a model that predicts the energy usage, for a given hour, for the month of July.
-July was selected, as eSC thought July is typically the highest energy usage month.
+
 
 ```{r}
 # Linear Model
@@ -159,7 +149,7 @@ summary(model_lm)
 # print(paste("Accuracy:", round(accuracy * 100, 2), "%"))
 ```
 
-d. Understand and be able to explain your model’s accuracy.
+
 
 ```{r}
 # Call:
@@ -282,14 +272,12 @@ d. Understand and be able to explain your model’s accuracy.
 # 10) for each one-unit increase in daily humidity, the dependent variable decreases by approximately 0.02453 units, keeping other factors constant.
 ```
 
-e. Create a new weather dataset, with all July temperatures 5 degrees warmer
 
 ```{r}
 final_cleaned$daily_temperature <- final_cleaned$daily_temperature + 5
 ```
 
-f. Use your best model to evaluate peak future energy demand (assuming no new
-customers)
+
 
 ```{r}
 predicted_energy_demand <- predict(model_lm, newdata = final_cleaned)
@@ -297,9 +285,7 @@ peak_energy_demand <- max(predicted_energy_demand)
 peak_energy_demand
 ```
 
-g. Show future peak energy demand in total (for an hour):
-    a. For different geographic regions
-    b. For other dimensions /attributes you think important
+
 
 ```{r}
 hot_humid_region <- final_cleaned %>%
@@ -321,10 +307,8 @@ mixed_humid_region
 write.csv(final_cleaned, "D:/IDS_Final/Final_app.csv", row.names = FALSE)
 ```
 
-h. Create a shiny application so that your client can interact with the data
-    a. To better understand your model’s energy prediction
-    b. To better understand the potential future energy needs
-    (and drivers of that future energy need)
+
+   
 
 ```{r}
 
@@ -408,7 +392,7 @@ shinyApp(ui, server)
 
 ```
 
-i. Identify one potential approach to reduce peak energy demand
+
 
 ```{r}
 # Potential energy usage optimization:
@@ -419,8 +403,7 @@ i. Identify one potential approach to reduce peak energy demand
 # Income-Targeted Incentives: Offer subsidies or incentives for wealthier households to invest in renewable energy solutions, offsetting their higher energy usage.
 ```
 
-j. What would you suggest, how would you model the impact. How would you explain the
-impact. BE DATA DRIVEN
+
 
 ```{r}
 # copy the data

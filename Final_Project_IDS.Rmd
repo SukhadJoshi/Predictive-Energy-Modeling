@@ -1,0 +1,454 @@
+
+---
+output:
+  pdf_document: default
+  html_document: default
+---
+
+# Intro to Data Science - Final Project
+# Group Members:-
+# 1. Jackson Bayuk
+# 2. Sukhad Dnyanesh Joshi
+# 3. Kunal Ahirrao
+# 4. Het Bhavesh Trivedi
+# 5. Tianyuan Sheng
+# 6. Marina Mitiaeva
+```{r}
+#install.packages("arrow")
+library(arrow)
+library(tidyverse)
+library(dplyr)
+library(purrr)
+```
+
+a. Determine the best approach to read and merge the data and determine what should be
+the output during this ‘data preparation’ phase.
+
+```{r}
+# data description 
+meta_d <- read_csv("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/data_dictionary.csv", show_col_types = FALSE)
+View(meta_d)
+
+# actual data
+
+# sample of observed houses
+static_house <- read_parquet("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/static_house_info.parquet", show_col_types = FALSE)
+houses <- static_house[c("bldg_id", "in.sqft", "in.bedrooms", "in.building_america_climate_zone", "in.clothes_dryer", "in.clothes_washer", "in.cooking_range", "in.county", "in.federal_poverty_level")]
+houses <- houses[1:1000, ]
+```
+
+```{r}
+# Function to process energy data for each house
+process_energy_data <- function(bldg_id) {
+  energy_test <- paste0("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/2023-houseData/", bldg_id, ".parquet")
+  energy <- read_parquet(energy_test)
+  
+  # Filter and sum consumption
+  energy %>%
+    mutate(date = as.Date(time), total_usage = rowSums(select(., 1:42)), bldg_id = bldg_id) %>%
+    filter(date >= as.Date('2018-07-01') & date <= as.Date('2018-07-31')) %>%
+    na.omit() %>%
+    group_by(date, bldg_id) %>%
+    summarise(daily_total_usage = sum(total_usage, na.rm = TRUE), .groups = 'drop') %>%
+    left_join(houses, by = 'bldg_id')
+}
+
+# Pre-read and aggregate weather data
+weather_data <- lapply(unique(houses$in.county), function(county) {
+  weather_file <- paste0("https://intro-datascience.s3.us-east-2.amazonaws.com/SC-data/weather/2023-weather-data/", county, ".csv")
+  weather <- tryCatch(read_csv(weather_file), error = function(e) return(tibble()))
+  names(weather)[2] <- "temperature"
+  names(weather)[3] <- "humidity"
+  weather %>%
+    mutate(date = as.Date(date_time)) %>%
+    filter(date >= as.Date('2018-07-01') & date <= as.Date('2018-07-31')) %>%
+    group_by(date) %>%
+    summarise(
+      daily_temperature = mean(as.numeric(temperature), na.rm = TRUE),
+      daily_humidity = mean(as.numeric(humidity), na.rm = TRUE),
+      .groups = 'drop'
+    ) %>%
+    mutate(in_county = county) %>%
+    distinct()
+}) %>%
+  bind_rows()
+view(weather_data)
+# Process data for each house and bind rows
+new_df <- map_dfr(houses$bldg_id, process_energy_data)
+
+# Join with weather data
+final <- left_join(new_df, weather_data, by = c("in.county" = "in_county", "date"))
+View(final)
+
+
+```
+
+b. Do exploratory analysis of the data – to gain some basic insight about the data
+
+```{r}
+# first 5 rows of the data
+head(final)
+# last 5 rows of the data
+tail(final)
+# structure 
+str(final)
+# summary 
+summary(final)
+# missing values
+final_cleaned <- na.omit(final)
+# duplicates
+num_duplicates <- sum(duplicated(final))
+num_duplicates
+
+hist(final_cleaned$in.sqft)
+hist(final_cleaned$daily_total_usage)
+hist(final_cleaned$in.sqft)
+```
+
+c. Build a model that predicts the energy usage, for a given hour, for the month of July.
+July was selected, as eSC thought July is typically the highest energy usage month.
+
+```{r}
+# Linear Model
+library(caret)
+set.seed(123)  # For reproducibility
+splitIndex <- createDataPartition(final_cleaned$daily_total_usage, p = .8, list = FALSE)
+train <- final_cleaned[splitIndex,]
+test <- final_cleaned[-splitIndex,]
+
+# Inspect unique values in all categorical variables
+categorical_columns <- sapply(train, is.character)
+unique_values <- sapply(train[, categorical_columns], unique)
+
+# Print the unique values of each categorical column
+print(unique_values)
+
+# Convert categorical columns to factors and ensure they have more than one level
+train[, categorical_columns] <- lapply(train[, categorical_columns], function(x) {
+    if (length(unique(x)) > 1) factor(x) else NULL
+})
+
+model_lm <- lm(daily_total_usage ~ ., data = final_cleaned)
+summary(model_lm)
+
+
+
+
+# Random Forest
+#install.packages("randomForest")
+# library(randomForest)
+# 
+# # Split the data into training and testing sets
+# set.seed(123)
+# splitIndex <- createDataPartition(final_cleaned$daily_total_usage, p = .8, list = FALSE)
+# train <- final_cleaned[splitIndex,]
+# test <- final_cleaned[-splitIndex,]
+# 
+# # Define the random forest model
+# model_rf <- randomForest(daily_total_usage ~ ., data = train, ntree = 25)
+# 
+# print(model_rf)
+# 
+# # Make predictions on the test set
+# predictions_rf <- predict(model_rf, newdata = test)
+# 
+# # Evaluate model accuracy
+# # accuracy_rf <- sqrt(mean((test$daily_total_usage - predictions_rf)^2))
+# # print(paste("Root Mean Squared Error (Random Forest):", round(accuracy_rf, 2)))
+# accuracy <- 1 - (mean((test$daily_total_usage - predictions_rf)^2) / var(test$daily_total_usage))
+# print(paste("Accuracy:", round(accuracy * 100, 2), "%"))
+```
+
+d. Understand and be able to explain your model’s accuracy.
+
+```{r}
+# Call:
+# lm(formula = daily_total_usage ~ ., data = train)
+# 
+# Residuals:
+#     Min      1Q  Median      3Q     Max 
+# -70.812  -5.103   0.030   5.524  46.410 
+# 
+# Coefficients: (1 not defined because of singularities)
+#                                               Estimate Std. Error t value Pr(>|t|)    
+# (Intercept)                                  1.909e+02  1.335e+02   1.430 0.152750    
+# date                                        -1.246e-02  7.513e-03  -1.658 0.097361 .  
+# bldg_id                                     -2.142e-05  2.205e-06  -9.715  < 2e-16 ***
+# in.sqft                                      5.178e-03  5.330e-05  97.152  < 2e-16 ***
+# in.bedrooms                                  1.067e+00  8.266e-02  12.911  < 2e-16 ***
+# in.building_america_climate_zoneMixed-Humid  4.645e+00  1.147e+00   4.051 5.11e-05 ***
+# in.clothes_dryerElectric, 120% Usage        -3.136e+00  1.571e+00  -1.996 0.045904 *  
+# in.clothes_dryerElectric, 80% Usage          1.317e+00  1.070e+00   1.230 0.218566    
+# in.clothes_dryerGas, 100% Usage             -1.935e+00  3.984e-01  -4.856 1.21e-06 ***
+# in.clothes_dryerGas, 120% Usage             -8.786e+00  1.636e+00  -5.371 7.92e-08 ***
+# in.clothes_dryerGas, 80% Usage               1.961e+00  1.194e+00   1.643 0.100490    
+# in.clothes_dryerNone                         1.698e+00  5.523e-01   3.075 0.002110 ** 
+# in.clothes_dryerPropane, 100% Usage         -3.474e+00  6.860e-01  -5.065 4.11e-07 ***
+# in.clothes_dryerPropane, 120% Usage         -4.521e+00  1.935e+00  -2.336 0.019490 *  
+# in.clothes_dryerPropane, 80% Usage          -8.582e+00  1.497e+00  -5.733 9.98e-09 ***
+# in.clothes_washerEnergyStar, 120% Usage      6.250e+00  1.796e+00   3.480 0.000502 ***
+# in.clothes_washerEnergyStar, 80% Usage       4.898e-01  1.330e+00   0.368 0.712700    
+# in.clothes_washerNone                       -8.330e-01  7.742e-01  -1.076 0.281954    
+# in.clothes_washerStandard, 100% Usage        2.128e+00  1.835e-01  11.596  < 2e-16 ***
+# in.clothes_washerStandard, 120% Usage        6.397e+00  1.812e+00   3.530 0.000416 ***
+# in.clothes_washerStandard, 80% Usage         3.774e-01  1.353e+00   0.279 0.780323    
+# in.cooking_rangeElectric, 120% Usage         6.556e+00  8.962e-01   7.315 2.65e-13 ***
+# in.cooking_rangeElectric, 80% Usage         -4.152e+00  8.169e-01  -5.082 3.76e-07 ***
+# in.cooking_rangeGas, 100% Usage              1.049e+00  2.291e-01   4.577 4.73e-06 ***
+# in.cooking_rangeGas, 120% Usage              9.215e+00  9.086e-01  10.142  < 2e-16 ***
+# in.cooking_rangeGas, 80% Usage              -1.984e+00  8.730e-01  -2.273 0.023055 *  
+# in.cooking_rangeNone                        -1.816e+00  6.214e-01  -2.923 0.003468 ** 
+# in.cooking_rangePropane, 100% Usage          2.094e+00  3.345e-01   6.261 3.90e-10 ***
+# in.cooking_rangePropane, 120% Usage          1.023e+01  1.031e+00   9.922  < 2e-16 ***
+# in.cooking_rangePropane, 80% Usage          -9.933e-01  9.658e-01  -1.029 0.303709    
+# in.countyG4500030                           -8.246e-01  8.665e-01  -0.952 0.341235    
+# in.countyG4500050                           -3.265e-01  1.376e+00  -0.237 0.812451    
+# in.countyG4500070                            2.903e+00  8.535e-01   3.402 0.000671 ***
+# in.countyG4500090                            3.432e+00  1.370e+00   2.506 0.012223 *  
+# in.countyG4500110                            1.026e+01  1.272e+00   8.067 7.52e-16 ***
+# in.countyG4500130                            4.628e+00  8.561e-01   5.406 6.50e-08 ***
+# in.countyG4500150                            2.456e+00  8.713e-01   2.818 0.004835 ** 
+# in.countyG4500170                           -1.622e-01  2.160e+00  -0.075 0.940153    
+# in.countyG4500190                            4.837e+00  8.418e-01   5.746 9.22e-09 ***
+# in.countyG4500210                            1.216e+00  9.587e-01   1.269 0.204609    
+# in.countyG4500230                           -1.931e+00  1.121e+00  -1.724 0.084790 .  
+# in.countyG4500250                           -1.359e+00  9.707e-01  -1.400 0.161570    
+# in.countyG4500270                            9.442e-01  1.258e+00   0.751 0.452835    
+# in.countyG4500290                            2.951e+00  1.040e+00   2.837 0.004551 ** 
+# in.countyG4500310                           -6.106e-01  9.809e-01  -0.622 0.533635    
+# in.countyG4500330                           -4.452e+00  1.043e+00  -4.270 1.96e-05 ***
+# in.countyG4500350                            2.150e+00  9.175e-01   2.344 0.019100 *  
+# in.countyG4500370                            1.481e+00  1.138e+00   1.301 0.193193    
+# in.countyG4500390                           -4.653e+00  1.149e+00  -4.051 5.12e-05 ***
+# in.countyG4500410                            1.247e-01  8.921e-01   0.140 0.888789    
+# in.countyG4500430                            9.396e-01  9.622e-01   0.977 0.328806    
+# in.countyG4500450                           -2.523e-01  8.175e-01  -0.309 0.757656    
+# in.countyG4500470                           -6.969e+00  9.586e-01  -7.270 3.69e-13 ***
+# in.countyG4500490                            4.071e+00  1.136e+00   3.585 0.000337 ***
+# in.countyG4500510                            1.387e+00  8.492e-01   1.634 0.102282    
+# in.countyG4500530                                   NA         NA      NA       NA    
+# in.countyG4500550                            3.038e-01  9.334e-01   0.326 0.744796    
+# in.countyG4500570                           -4.751e+00  9.071e-01  -5.237 1.64e-07 ***
+# in.countyG4500590                            1.318e+00  9.642e-01   1.367 0.171547    
+# in.countyG4500610                           -9.233e+00  1.371e+00  -6.735 1.67e-11 ***
+# in.countyG4500630                            1.690e+00  8.465e-01   1.997 0.045848 *  
+# in.countyG4500650                           -2.143e+00  1.379e+00  -1.553 0.120404    
+# in.countyG4500670                           -1.199e+01  1.174e+00 -10.217  < 2e-16 ***
+# in.countyG4500690                            1.954e+00  1.119e+00   1.745 0.080982 .  
+# in.countyG4500710                           -5.179e+00  1.066e+00  -4.860 1.18e-06 ***
+# in.countyG4500730                           -1.483e-01  9.172e-01  -0.162 0.871526    
+# in.countyG4500750                           -6.451e+00  8.907e-01  -7.243 4.52e-13 ***
+# in.countyG4500770                            2.276e+00  8.902e-01   2.557 0.010557 *  
+# in.countyG4500790                           -1.432e+00  8.372e-01  -1.711 0.087182 .  
+# in.countyG4500830                           -9.422e-01  8.298e-01  -1.135 0.256207    
+# in.countyG4500850                           -3.804e+00  9.698e-01  -3.923 8.78e-05 ***
+# in.countyG4500870                           -6.070e-01  1.072e+00  -0.566 0.571257    
+# in.countyG4500890                            1.084e+00  1.055e+00   1.027 0.304350    
+# in.countyG4500910                           -1.406e+00  8.455e-01  -1.663 0.096394 .  
+# in.federal_poverty_level100-150%             1.986e+00  3.109e-01   6.387 1.72e-10 ***
+# in.federal_poverty_level150-200%            -1.504e+00  2.822e-01  -5.332 9.81e-08 ***
+# in.federal_poverty_level200-300%             2.598e+00  2.509e-01  10.355  < 2e-16 ***
+# in.federal_poverty_level300-400%             1.290e+00  2.511e-01   5.138 2.79e-07 ***
+# in.federal_poverty_level400%+                1.267e+00  2.226e-01   5.691 1.28e-08 ***
+# daily_temperature                            1.562e+00  5.525e-02  28.271  < 2e-16 ***
+# daily_humidity                              -2.453e-02  8.410e-03  -2.917 0.003539 ** 
+# ---
+# Signif. codes:  0 ‘***’ 0.001 ‘**’ 0.01 ‘*’ 0.05 ‘.’ 0.1 ‘ ’ 1
+# 
+# Residual standard error: 9.553 on 24720 degrees of freedom
+# Multiple R-squared:  0.5101,	Adjusted R-squared:  0.5085 
+# F-statistic: 325.7 on 79 and 24720 DF,  p-value: < 2.2e-16
+
+
+# p-value: < 2.2e-16 proves that the model is statistically significant so results are meaningful
+
+
+# The adjusted R-squared value of 0.5085 indicates that approximately 50.85% 
+# of the variability in the dependent variable can be explained by the independent 
+# variables included in the model. 
+
+
+# Here is the list of some statistically significant variables and their influence:
+# 1) in.sqft: An increase in square footage (per unit) is associated with a slight increase in the dependent variable.
+# 2) in.bedrooms: Each additional bedroom is associated with an increase in the dependent variable.
+# 3) in.building_america_climate_zoneMixed-Humid: Being in the Mixed-Humid climate zone is associated with an increase in the dependent variable compared to the reference climate zone.
+# 4) clothes_dryer: A decrease is associated with the dependent variable compared to the reference clothes dryer type for both electronic, gas,types, propane types, while being without a clothes dryer is associated with an increase in the dependent variable compared to the reference type.
+# 5) in.clothes_washerStandard: A standard washer with 100% usage is associated with an increase in the dependent variable compared to the reference washer type.
+# 6) in.cooking_range: An electric, gas and propane cooking rangew with over 80% are associated with an increase in the dependent variable compared to the reference cooking range type, while being without a cooking range or with %80 usage are associated with a decrease in the dependent variable compared to the reference type.
+# 7) Being in some countries is associated with an increase/decrease in the dependent variable compared to the reference county, meaning that location matters and could be further investigated deeper.
+# 8) Each additional change in federal poverty for the ranges 100-150%, 200-300%, 300-400%, 400%+
+# is associated with an increase in the dependent variable compared to the reference type.
+# 9) for each one-unit increase in daily temperature, the dependent variable increases by approximately 1.562 units, holding all other variables constant.
+# 10) for each one-unit increase in daily humidity, the dependent variable decreases by approximately 0.02453 units, keeping other factors constant.
+```
+
+e. Create a new weather dataset, with all July temperatures 5 degrees warmer
+
+```{r}
+final_cleaned$daily_temperature <- final_cleaned$daily_temperature + 5
+```
+
+f. Use your best model to evaluate peak future energy demand (assuming no new
+customers)
+
+```{r}
+predicted_energy_demand <- predict(model_lm, newdata = final_cleaned)
+peak_energy_demand <- max(predicted_energy_demand)
+peak_energy_demand
+```
+
+g. Show future peak energy demand in total (for an hour):
+    a. For different geographic regions
+    b. For other dimensions /attributes you think important
+
+```{r}
+hot_humid_region <- final_cleaned %>%
+  filter(in.building_america_climate_zone == "Hot-Humid")
+mixed_humid_region <- final_cleaned %>%
+  filter(in.building_america_climate_zone == "Mixed-Humid")
+# predicted_energy_HH <- predict(model_lm, newdata = hot_humid_region)
+# peak_energy_demandHH <- max(predicted_energy_HH)
+# peak_energy_demandHH
+# 
+# predicted_energy_MH <- predict(model_lm, newdata = mixed_humid_region)
+# peak_energy_demandMH <- max(predicted_energy_HH)
+# peak_energy_demandMH
+
+hot_humid_region
+mixed_humid_region
+
+
+write.csv(final_cleaned, "D:/IDS_Final/Final_app.csv", row.names = FALSE)
+```
+
+h. Create a shiny application so that your client can interact with the data
+    a. To better understand your model’s energy prediction
+    b. To better understand the potential future energy needs
+    (and drivers of that future energy need)
+
+```{r}
+
+# Shiny App Link - https://sjoshi12.shinyapps.io/Final_app_IDS/
+
+library(shiny)
+library(ggplot2)  # For plotting
+model3 <- lm(daily_total_usage ~ in.sqft + in.bedrooms + in.building_america_climate_zone + in.clothes_dryer + in.clothes_washer + in.cooking_range + in.county + in.federal_poverty_level + daily_temperature + daily_humidity, data = final_cleaned)
+
+
+# Assuming your model_lm and train data are available
+str(final_cleaned)
+# UI
+ui <- fluidPage(
+  titlePanel("Energy Prediction App"),
+  sidebarLayout(
+    sidebarPanel(
+      # Add input controls for each predictor
+      sliderInput("in_sqft", "Square Footage", min = min(train$in.sqft), max = max(train$in.sqft), value = mean(train$in.sqft)),
+      sliderInput("in_bedrooms", "Number of bedrooms", min = min(train$in.bedrooms), max = max(train$in.bedrooms), value = mean(train$in.bedrooms)),
+      selectInput("in_building_america_climate_zone", "Climate Zone", choices = unique(train$in.building_america_climate_zone), selected = (unique(train$in.building_america_climate_zone)[1])),
+      sliderInput("daily_temperature", "Temperature", min = min(train$daily_temperature), max = max(train$daily_temperature), value = mean(train$daily_temperature)),
+    selectInput("in_clothes_dryer", "Clothes Dryer Type", choices = (unique(train$in.clothes_dryer)), selected = (unique(train$in.clothes_dryer)[1])),
+    selectInput("in_clothes_washer", "Clothes Washer Type", choices = (unique(train$in.clothes_washer)), selected = (unique(train$in.clothes_washer)[1])),
+    selectInput("in_cooking_range", "Cooking Range", choices = (unique(train$in.cooking_range)), selected = (unique(train$in.cooking_range)[1])),
+    selectInput("in_county", "County", choices = (unique(train$in.county)), selected = (unique(train$in.county)[1])),
+    selectInput("in_poverty_level", "Poverty Level", choices = (unique(train$in.federal_poverty_level)), selected = (unique(train$in.federal_poverty_level)[1])),
+     sliderInput("daily_humidity", "Humidity", min = min(train$daily_humidity), max = max(train$daily_humidity), value = mean(train$daily_humidity))),
+  
+  
+      # Repeat this for other predictors or use selectInput for categorical variables
+      # selectInput("in_bedrooms", "Number of Bedrooms", choices = unique(train$in.bedrooms), selected = unique(train$in.bedrooms)[1]),
+      # Add more controls as needed
+      actionButton("predictButton", "Predict")
+    ),
+    mainPanel(
+      # Display the predicted total usage
+      h4("Predicted Total Energy Usage:"),
+      textOutput("prediction"),
+
+      # Display the prediction plot
+      plotOutput("predictionPlot")
+    )
+  )
+
+# Server
+server <- function(input, output) {
+  # Function to run the model and make predictions
+  predict_energy <- eventReactive(input$predictButton, {
+    # Create a new data frame with user inputs
+    new_data <- data.frame(
+      in.sqft = input$in_sqft,
+      in.bedrooms = input$in_bedrooms,
+      in.building_america_climate_zone = input$in_building_america_climate_zone,
+      daily_temperature = input$daily_temperature,
+      in.clothes_dryer = input$in_clothes_dryer,
+      in.clothes_washer = input$in_clothes_washer,
+      in.cooking_range = input$in_cooking_range,
+      in.county = input$in_county,
+      in.federal_poverty_level = input$in_poverty_level,
+      daily_humidity = input$daily_humidity
+      # Add more variables as needed
+    )
+
+    # Make predictions
+    predictions <- predict(model3, new_data)
+    return(predictions)
+  })
+
+  # Output the predicted total usage
+  output$prediction <- renderText({
+    paste("Predicted Total Energy Usage: ", round(predict_energy(), 2))
+  })
+
+  
+}
+
+# Run the app
+shinyApp(ui, server)
+
+
+```
+
+i. Identify one potential approach to reduce peak energy demand
+
+```{r}
+# Potential energy usage optimization:
+# Appliance Efficiency: Promote energy-efficient dryers and washers and incentivize off-peak usage to reduce energy consumption during peak times.
+# Cooking Habits: Encourage the use of energy-efficient cooking appliances and off-peak cooking to lower energy use associated with cooking ranges.
+# Climate Control: Improve insulation and HVAC efficiency, particularly in Mixed-Humid zones, to mitigate the impact of temperature on energy demand.
+# Home Design: Advocate for the design of smaller, energy-efficient homes and efficient space utilization in larger homes to address the energy increase from larger square footage and more bedrooms.
+# Income-Targeted Incentives: Offer subsidies or incentives for wealthier households to invest in renewable energy solutions, offsetting their higher energy usage.
+```
+
+j. What would you suggest, how would you model the impact. How would you explain the
+impact. BE DATA DRIVEN
+
+```{r}
+# copy the data
+modeling <- final_cleaned
+head(modeling)
+# reduce the sqft of each entry by 10% of its own value
+modeling$in.sqft <- modeling$in.sqft * 0.9
+# unique building IDs
+unique_ids <- unique(modeling$bldg_id)
+
+# function to update a subset of rows for each building ID
+update_cooking_range <- function(df, bldg_id) {
+  rows <- which(df$bldg_id == bldg_id)
+  # Calculate the number of rows to update (25% of the rows for this bldg_id)
+  n_update <- ceiling(length(rows) * 0.25)
+  # Randomly select rows to update
+  rows_to_update <- sample(rows, n_update)
+  # Update the cooking range for these rows
+  df$in.cooking_range[rows_to_update] <- "Electric, 80% Usage"
+  return(df)
+}
+
+# apply the function to each building ID
+for (id in unique_ids) {
+  modeling <- update_cooking_range(modeling, id)
+}
+
+predicted_energy_demand2 <- predict(model_lm, newdata = modeling)
+peak_energy_demand2 <- max(predicted_energy_demand2)
+peak_energy_demand2
+```
